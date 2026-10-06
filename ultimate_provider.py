@@ -118,21 +118,42 @@ class LibreTorrentProvider(ProtocolProvider):
     # ---------- 状态 ----------
 
     def get_query_status(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """就绪状态：区分「平台不支持」「未检测到 LibreTorrent」「就绪」。
+        """就绪状态。
 
-        这里不会返回 ``configured=False`` 以外的拦截——即便探测不到 LibreTorrent，
-        也保持 ``configured=True``，因为 Android 11+ 的软件包可见性过滤会让已安装的
-        应用同样查不到，误判成「未安装」会把可用的引擎藏掉。
+        ``configured=False`` 只在**明确不具备 Android 运行环境**时返回（没有 Java 桥，
+        例如桌面端）。一旦处于 Android 端，任何探测失败都保持 ``configured=True``：
+
+        宿主前端会按 ``status.configured !== false`` 过滤可投递引擎，所以把「探测失败」
+        报成「未配置」会让引擎从界面上静默消失，用户看到的是「没有配置下载引擎」——
+        而配置其实是好的。探测问题应当作为 message 暴露，并在真正投递时给出精确错误。
+
+        同理，探测不到 LibreTorrent 也不判为不可用：Android 11+ 的软件包可见性过滤会
+        让已安装的应用同样查不到（``is_package_installed`` 因此设计成三态）。
         """
         normalized = self.normalize_config(config)
         runtime = load_android_runtime()
-        if runtime is None or runtime.android_context() is None:
-            reason = (
-                runtime.unavailable_reason()
-                if runtime is not None
-                else "未找到 Android 适配模块"
-            )
-            return {"configured": False, "message": reason, "missing_fields": []}
+        if runtime is None:
+            return {
+                "configured": False,
+                "message": "未找到 Android 适配模块，LibreTorrent 引擎只能在 Android 端使用",
+                "missing_fields": [],
+            }
+        if not runtime.has_java_bridge():
+            return {
+                "configured": False,
+                "message": runtime.unavailable_reason(),
+                "missing_fields": [],
+            }
+
+        if runtime.android_context() is None:
+            return {
+                "configured": True,
+                "message": (
+                    "已启用，但本次未能获取 Android 上下文；"
+                    "仅影响状态探测，投递时会给出具体错误。"
+                ),
+                "missing_fields": [],
+            }
 
         installed = runtime.is_package_installed(normalized["package_name"])
         if installed is False:

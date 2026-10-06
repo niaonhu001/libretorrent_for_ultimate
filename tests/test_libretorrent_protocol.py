@@ -50,11 +50,19 @@ def provider():
 
 
 class _FakeRuntime:
-    """替身 Android 适配层：记录调用并返回固定结果。"""
+    """替身 Android 适配层：记录调用并返回固定结果。
 
-    def __init__(self, error=None):
+    ``bridge=False`` 模拟桌面端（没有 Java 桥）；``error`` 模拟 Android 端上的
+    运行时探测失败。两者语义不同，测试必须能区分——这正是状态逻辑的关键分支。
+    """
+
+    def __init__(self, error=None, bridge=True):
         self.calls = []
         self.error = error
+        self.bridge = bridge
+
+    def has_java_bridge(self):
+        return self.bridge
 
     def android_context(self):
         return None if self.error else object()
@@ -216,13 +224,32 @@ def test_execute_uses_custom_package_name(provider, monkeypatch):
 
 
 def test_query_status_reports_platform_limitation(provider, monkeypatch):
+    """没有 Java 桥 = 明确不是 Android 端，才判为不可用。"""
     module = _load_provider_module()
     monkeypatch.setattr(
-        module, "load_android_runtime", lambda: _FakeRuntime(error="只能在 Android 端使用")
+        module,
+        "load_android_runtime",
+        lambda: _FakeRuntime(error="只能在 Android 端使用", bridge=False),
     )
     status = provider.get_query_status({"enabled": True})
     assert status["configured"] is False
     assert "Android" in status["message"]
+
+
+def test_query_status_keeps_engine_visible_when_context_probe_fails(provider, monkeypatch):
+    """Android 端探测失败时**不能**报成未配置。
+
+    宿主前端按 status.configured !== false 过滤可投递引擎，若把探测失败报成
+    「未配置」，引擎会从界面上静默消失，用户看到的是「没有配置下载引擎」——
+    而配置其实是好的。这里锁定修复后的语义：保持可见 + 用 message 说明。
+    """
+    module = _load_provider_module()
+    monkeypatch.setattr(
+        module, "load_android_runtime", lambda: _FakeRuntime(error="上下文探测失败")
+    )
+    status = provider.get_query_status({"enabled": True})
+    assert status["configured"] is True
+    assert "上下文" in status["message"]
 
 
 def test_query_status_stays_configured_when_package_not_detected(provider, monkeypatch):

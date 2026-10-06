@@ -75,6 +75,16 @@ def _java_classes() -> Optional[Dict[str, Any]]:
         return None
 
 
+def has_java_bridge() -> bool:
+    """当前进程是否有 Chaquopy 的 Java 桥。
+
+    这是「是不是 Android 端」的可靠判据：桌面端没有 `java` 模块，Android 端有。
+    与 :func:`android_context` 的区别很重要——后者会因为运行时探测失败而返回 None，
+    那并不代表平台不支持，因此不能用来判定「不可用」。
+    """
+    return _java_classes() is not None
+
+
 def android_context() -> Any:
     """返回 Android Application 上下文；非 Android 环境返回 None。
 
