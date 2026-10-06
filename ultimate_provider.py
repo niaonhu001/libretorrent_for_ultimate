@@ -146,11 +146,17 @@ class LibreTorrentProvider(ProtocolProvider):
             }
 
         if runtime.android_context() is None:
+            detail = ""
+            try:
+                detail = str(runtime.unavailable_reason() or "").strip()
+            except Exception:
+                detail = ""
             return {
                 "configured": True,
                 "message": (
-                    "已启用，但本次未能获取 Android 上下文；"
-                    "仅影响状态探测，投递时会给出具体错误。"
+                    "已启用，但未能获取 Android 上下文；仅影响状态探测，"
+                    "投递时会给出具体错误。"
+                    + (f"（{detail}）" if detail else "")
                 ),
                 "missing_fields": [],
             }

@@ -42,6 +42,21 @@ def _load_provider_module():
     return module
 
 
+def _load_runtime_module():
+    """按路径加载 Android 适配层，模块名唯一避免与其它插件冲突。"""
+    module_name = "libretorrent_android_runtime_undertest"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib.util.spec_from_file_location(
+        module_name, PLUGIN_DIR / "libretorrent_android_runtime.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.fixture()
 def provider():
     module = _load_provider_module()
@@ -81,6 +96,21 @@ class _FakeRuntime:
 
 
 # ---------- manifest ----------
+
+
+def test_context_probe_reports_which_stage_failed():
+    """非 Android 环境时，探测必须说清卡在哪一步，而不是一句含糊的「不可用」。
+
+    真机上没有 adb 时，这条诊断会随投递失败的错误提示显示出来，直接指出是
+    「没有 java 模块」「Python 未启动」还是「平台不是 AndroidPlatform」。
+    """
+    runtime = _load_runtime_module()
+    context, detail = runtime.context_probe()
+    assert context is None
+    assert detail, "诊断信息不能为空"
+    assert ("java" in detail) or ("Chaquopy" in detail)
+    assert runtime.has_java_bridge() is False
+    assert "Android" in runtime.unavailable_reason()
 
 
 def test_manifest_declares_only_magnet_submission():

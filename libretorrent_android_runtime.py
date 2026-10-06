@@ -75,6 +75,51 @@ def _java_classes() -> Optional[Dict[str, Any]]:
         return None
 
 
+def context_probe() -> tuple:
+    """探测 Android 上下文，返回 ``(context, 诊断信息)``。
+
+    ``context`` 为 None 时，诊断信息说明**具体卡在哪一步**。这很重要：在真机上
+    没有 adb 时，这条信息会随投递失败的错误提示显示出来，直接指出是「不是 Android
+    端」「Python 未启动」「getPlatform() 为 null」还是「平台不是 AndroidPlatform」，
+    不必再靠猜。
+    """
+    try:
+        from java import jclass  # type: ignore
+    except Exception as exc:
+        return None, f"当前进程没有 java 模块（{type(exc).__name__}），不是 Chaquopy 运行环境"
+    try:
+        python_cls = jclass("com.chaquo.python.Python")
+    except Exception as exc:
+        return None, f"无法加载 com.chaquo.python.Python：{exc}"
+    try:
+        if not python_cls.isStarted():
+            return None, "Chaquopy Python 尚未启动（Python.isStarted() 为 false）"
+    except Exception as exc:
+        return None, f"调用 Python.isStarted() 失败：{exc}"
+    try:
+        platform = python_cls.getPlatform()
+    except Exception as exc:
+        return None, f"调用 Python.getPlatform() 失败：{exc}"
+    if platform is None:
+        return None, "Python.getPlatform() 返回 null（Python 未通过 start() 启动）"
+    try:
+        application = platform.getApplication()
+    except Exception as exc:
+        platform_name = ""
+        try:
+            platform_name = str(platform.getClass().getName())
+        except Exception:
+            platform_name = "<未知平台>"
+        return None, (
+            f"平台 {platform_name} 没有 getApplication()"
+            "（通常意味着 Python 是被 GenericPlatform 启动的，而不是 AndroidPlatform）："
+            f"{exc}"
+        )
+    if application is None:
+        return None, "AndroidPlatform.getApplication() 返回 null"
+    return application, ""
+
+
 def has_java_bridge() -> bool:
     """当前进程是否有 Chaquopy 的 Java 桥。
 
@@ -86,31 +131,23 @@ def has_java_bridge() -> bool:
 
 
 def android_context() -> Any:
-    """返回 Android Application 上下文；非 Android 环境返回 None。
+    """返回 Android Application 上下文；非 Android 环境或探测失败返回 None。
 
     依据 Chaquopy Java API：``Python.getPlatform()`` 返回启动 Python 时使用的
     Platform，``AndroidPlatform.getApplication()`` 返回 Application 上下文。
+    需要知道**为什么**拿不到时用 :func:`context_probe`。
     """
-    classes = _java_classes()
-    if not classes:
-        return None
-    try:
-        python_cls = classes["Python"]
-        if not python_cls.isStarted():
-            return None
-        platform = python_cls.getPlatform()
-        if platform is None:
-            return None
-        return platform.getApplication()
-    except Exception:
-        return None
+    return context_probe()[0]
 
 
 def unavailable_reason() -> str:
-    """当前环境无法链式启动时的可读原因。"""
-    if _java_classes() is None:
+    """当前环境无法链式启动时的可读原因（含具体卡在哪一步）。"""
+    context, detail = context_probe()
+    if context is not None:
+        return ""
+    if not has_java_bridge():
         return "当前运行环境没有 Chaquopy Java 桥（LibreTorrent 引擎只能在 Android 端使用）"
-    return "无法获取 Android Application 上下文，LibreTorrent 引擎不可用"
+    return f"无法获取 Android Application 上下文：{detail}"
 
 
 def is_package_installed(package_name: str) -> Optional[bool]:
@@ -179,9 +216,11 @@ def start_download(uri: str, package_name: str = DEFAULT_PACKAGE_NAME) -> Dict[s
     if not (target.startswith("magnet:") or target.startswith("http://") or target.startswith("https://")):
         raise ValueError(f"不支持的链接类型：{target[:32]}")
 
-    context = android_context()
+    context, detail = context_probe()
+    if context is None:
+        raise RuntimeError(f"LibreTorrent 链式启动不可用：{detail or unavailable_reason()}")
     classes = _java_classes()
-    if context is None or not classes:
+    if not classes:
         raise RuntimeError(unavailable_reason())
 
     package = _as_text(package_name) or DEFAULT_PACKAGE_NAME
